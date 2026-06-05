@@ -79,6 +79,7 @@ int main(int argc, char *argv[]) {
 
     printf("Starting SYN scan on %s from port %d to %d...\n", target_ip, start_port, end_port);
 
+    // Send all SYN packets
     for (int port = start_port; port <= end_port; port++) {
         char datagram[4096];
         memset(datagram, 0, 4096);
@@ -119,25 +120,31 @@ int main(int argc, char *argv[]) {
         tcph->check = checksum((unsigned short *)&psh, sizeof(struct pseudo_header));
 
         sendto(s, datagram, iph->tot_len, 0, (struct sockaddr *)&sin, sizeof(sin));
+    }
 
-        char buffer[65536];
-        struct sockaddr_in saddr;
-        socklen_t saddr_len = sizeof(saddr);
+    // Set a 2 second timeout for receiving the bulk replies
+    tv.tv_sec = 2;
+    tv.tv_usec = 0; 
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
 
-        while (1) {
-            int data_size = recvfrom(s, buffer, 65536, 0, (struct sockaddr *)&saddr, &saddr_len);
-            if (data_size < 0) break; 
+    printf("Waiting for replies...\n");
 
-            struct iphdr *recv_iph = (struct iphdr *)buffer;
-            if (recv_iph->saddr == sin.sin_addr.s_addr) {
-                struct tcphdr *recv_tcph = (struct tcphdr *)(buffer + (recv_iph->ihl * 4));
-                if (ntohs(recv_tcph->source) == port) {
-                    if (recv_tcph->syn == 1 && recv_tcph->ack == 1) {
-                        printf("[+] Port %d is OPEN\n", port);
-                    } else if (recv_tcph->rst == 1) {
-                        // Port closed, we can stay silent or print it
-                    }
-                    break;
+    char buffer[65536];
+    struct sockaddr_in saddr;
+    socklen_t saddr_len = sizeof(saddr);
+
+    // Receive packets until timeout
+    while (1) {
+        int data_size = recvfrom(s, buffer, 65536, 0, (struct sockaddr *)&saddr, &saddr_len);
+        if (data_size < 0) break; // Timeout
+
+        struct iphdr *recv_iph = (struct iphdr *)buffer;
+        if (recv_iph->saddr == inet_addr(target_ip)) {
+            struct tcphdr *recv_tcph = (struct tcphdr *)(buffer + (recv_iph->ihl * 4));
+            int recv_port = ntohs(recv_tcph->source);
+            if (recv_port >= start_port && recv_port <= end_port) {
+                if (recv_tcph->syn == 1 && recv_tcph->ack == 1) {
+                    printf("[+] Port %d is OPEN\n", recv_port);
                 }
             }
         }
